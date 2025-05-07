@@ -1,0 +1,308 @@
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
+#include <iostream>
+#include <string>
+
+using namespace std;
+
+//Function definitions.
+void give_information();
+void detect_shape(cv::Mat& src, cv::Mat& dst, string& _shape);
+void detect_color(cv::Mat& mask, cv::Mat& blankImage,string& _color);
+void setHSV(string& color);
+void stage1(cv::Mat& src, cv::Mat& dst, string& shape);
+void stage2(cv:: Mat& src, cv::Mat& dst, cv::Mat& contoursImage, string& shape, string& color);
+void stage3(cv::Mat& src, cv::Mat& dst, cv::Mat& contoursImage, string& shape, string& color);
+void justColors(cv::Mat& src, cv::Mat& dst);
+vector<cv::Point2f> findCenterPoint(vector<vector<cv::Point>>contours);
+
+//Global variables initilization for HSV values which are used in color detection.
+int minH = 0, minS = 0, minV = 0, maxH = 0, maxS = 0, maxV = 0;
+
+int main() {
+    give_information();
+    int _stage;
+    string _shape;
+    string _color;
+
+    cout << "Enter the stage(1,2,3) : ";
+    cin >> _stage;
+    if(_stage == 1){
+        _shape = "cir";
+        _color = "doesntmatter";
+    }
+    else if(_stage == 2){
+        _shape = "cir";
+        cout << "Enter color(red, blue, green): ";
+        cin >> _color;
+        if(_color != "blue" && _color != "green" && _color != "red"){
+            cout << "INCORRECT COLOR!!!!" << endl;
+            return -1;
+        }
+    }
+    else if(_stage == 3){
+        cout << "Enter shape(rec -> rectangle, tri -> triangle, cir -> circle): ";
+        cin >> _shape;
+        if(_shape != "rec" && _shape != "cir" && _shape != "tri" && _shape != "squ"){
+            cout << "INCORRECT SHAPE!!!!" << endl;
+            return -1;
+        }   
+        cout << "Enter color(red, blue, green): ";
+        cin >> _color;
+        if(_color != "blue" && _color != "green" && _color != "red"){
+            cout << "INCORRECT COLOR!!!!" << endl;
+            return -1;
+        }
+    }
+    else if(_stage == 0){
+        cout << "Enter color(red, blue, green): ";
+        cin >> _color;
+        if(_color != "blue" && _color != "green" && _color != "red"){
+            cout << "INCORRECT COLOR!!!!" << endl;
+            return -1;
+        }
+        _shape = "";
+    }
+    setHSV(_color);
+      cv::Mat frame;
+      frame = cv::imread("PATH_TO_IMAGE"); //Use the path of your image i.e. : C:/OPEN_CV/PROJECTS/Images/colorfulShapes3.png
+      cv::Mat frame_clone = frame.clone();//It is used to show the original image.
+  
+      if(_stage == 1){
+          stage1(frame_clone, frame, _shape);
+          cv::imshow("Original Image", frame_clone);
+          cv::imshow("Targets", frame);
+      }
+  
+      else if(_stage == 2){
+          cv::Mat contoursImage = cv::Mat::zeros(frame.rows, frame.cols, CV_8UC3);//Blank Image, it will include contours coming from color detection.
+          stage2(frame_clone, frame, contoursImage, _shape, _color);
+          cv::imshow("Original Image", frame_clone);
+          cv::imshow("Targets", frame);
+          cv::imshow("Contours", contoursImage);
+      }
+      else if(_stage == 3){
+          cv::Mat contoursImage = cv::Mat::zeros(frame.rows, frame.cols, CV_8UC3);//Blank Image, it will include contours coming from color detection. 
+          stage3(frame_clone, frame, contoursImage, _shape, _color);
+          cv::imshow("Original Image", frame_clone);
+          cv::imshow("Targets", frame);
+          cv::imshow("Contours", contoursImage);
+      }
+      else if(_stage == 0){
+          justColors(frame_clone, frame);
+      }
+      else{
+          return -1;
+      }
+    cv::waitKey(0);
+    return 0;
+}
+
+/**It detects shapes of objects if they are circular, triangle or rectangular; and it marks the objects with asked shapes.
+cv::Mat& src is the input image, cv::Mat& dst is the output image inluding markings, cv::string& shape is the asked shape.*/
+void detect_shape(cv::Mat& src, cv::Mat& dst, string& _shape){
+    vector<vector<cv::Point>> contours;
+
+    //Hierarchy can be used in nested shapes.
+    vector<cv::Vec4i> hierarchy;
+
+    //With "RETR_EXTERNAL" we are only taking outer contours. "RETR_TREE" is used for building full hierarchy tree.(includes all contours).
+    //"CHAIN_APPROX_SIMPLE" uses only essential points to reduce memory usage. "CHAIN_APPROX_NONE" stores all points of the contours.
+    cv::findContours(src, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    //It stores the corner count of the shapes.
+    vector<vector<cv::Point>> contourPoly(contours.size());
+
+    //Bounding rectangle around shapes.
+    vector<cv::Rect> bound_rect(contours.size());
+
+    for(int i = 0; i < contours.size(); i++){
+        if(hierarchy[i][3] == -1){
+            double contour_area = cv::contourArea(contours[i]);
+            if(contour_area > 1000){//Minimum area value.
+                double peri = cv::arcLength(contours[i], true);
+
+                // Approximate poly curve with stated accurracy, and save them to the contourPoly array.
+                cv::approxPolyDP(contours[i], contourPoly[i], 0.03*peri, true);
+            }
+        }
+    }
+
+    vector<vector<cv::Point>> newContours;//Contour storage including shapes with only asked color and shape.
+    for(int i = 0; i < contours.size(); i++){
+        int obj_corners = (int)contourPoly[i].size();
+        string obj_name;
+
+        if(_shape == "tri" && obj_corners == 3){
+            obj_name = "Triangle";
+            newContours.push_back(contourPoly[i]);
+            bound_rect[i] = cv::boundingRect(contourPoly[i]);
+            cv::rectangle(dst, bound_rect[i].tl(), bound_rect[i].br(), cv::Scalar(0, 0, 255), 3);
+        }
+
+        else if(_shape == "rec" && obj_corners == 4){
+            float aspect_ratio = (float)bound_rect[i].width / (float)bound_rect[i].height;
+            obj_name = "Rectangle";
+            newContours.push_back(contourPoly[i]);
+            bound_rect[i] = cv::boundingRect(contourPoly[i]);
+            cv::rectangle(dst, bound_rect[i].tl(), bound_rect[i].br(), cv::Scalar(0, 0, 255), 3);
+        }
+
+        else if(_shape == "cir" && obj_corners > 4){
+            obj_name = "Circle";
+            newContours.push_back(contourPoly[i]);
+            bound_rect[i] = cv::boundingRect(contourPoly[i]);
+            cv::rectangle(dst, bound_rect[i].tl(), bound_rect[i].br(), cv::Scalar(0, 0, 255), 3);
+        }
+
+        cv::Point text_point{ bound_rect[i].x, bound_rect[i].y - 5};
+        cv::putText(dst, obj_name, text_point, cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(0, 0, 0), 1);
+
+    }
+        vector<cv::Point2f>centerPoints = findCenterPoint(newContours);
+        for(size_t i = 0; i < centerPoints.size(); i++){
+            cv::circle(dst, centerPoints[i], 5, cv::Scalar(0, 0, 0), cv::FILLED);//Draws a circle to the center of the object.
+        }
+}
+
+void give_information(){
+    cout << "------SHORT INFORMATION------" << endl;
+    cout << "Stage1: It detects only balloons, color doesn't matter." << endl;
+    cout << "Stage2: It detects only balloons with asked color." << endl;
+    cout << "Stage3: You have to choose shape and color." << endl;
+}
+
+/**It finds the contours of the objects with asked color and draws them to a blank image which is used in shape detection.
+cv::Mat& mask is the image including HSV thresholds, cv::Mat& blankImage is used for shape detection and it includes contours
+of objects with given color. string& color is the asked color of the object.*/
+void detect_color(cv::Mat& mask,cv::Mat& blankImage, string& _color){
+    vector<vector<cv::Point>> contours;
+    vector<cv::Vec4i> hierarchy;
+
+    cv::findContours(mask, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE, cv::Point(0,0));
+    cv::drawContours(blankImage, contours, -1, cv::Scalar(255, 255, 255), 2);
+}
+
+/**It sets minH, minS, minV and maxH, maxS, maxV values according to the color; I have only have three different colors including specific tones of red, green and blue. You can add another values.*/
+void setHSV(string& color){
+    if(color == "blue"){
+        minH = 50;
+        minS = 190;
+        minV = 190;
+        maxH = 150;
+        maxS = 255;
+        maxV = 255;
+    }
+
+    else if(color == "green"){
+        minH = 35;
+        minS = 100;
+        minV = 100;
+        maxH = 85;
+        maxS = 255;
+        maxV = 255;
+    }
+    else if(color == "red"){
+        minH = 0;
+        minS = 240;
+        minV = 240;
+        maxH = 10;
+        maxS = 255;
+        maxV = 255;
+    }
+    else{
+        cout << "INCORRECT COLOR!!!!" << endl;
+    }
+}
+
+/**It detects only circles and color doesn't matter. It marks all circles.
+cv::Mat& src is the input image, cv::Mat&dst is the output image which which will be marked,
+string& shape will be automatically "cir"*/
+void stage1(cv::Mat& src, cv::Mat& dst, string& shape){
+    cv::Mat gray_img, blured_img, canny_img, dilated_img;
+    cv::cvtColor(src, gray_img, cv::COLOR_BGR2GRAY);
+    cv::GaussianBlur(gray_img, blured_img, cv::Size(3,3), 3, 0);
+    cv::Canny(blured_img, canny_img, 0, 50);
+    cv::Mat se1 = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3));
+    cv::dilate(canny_img, dilated_img, se1);
+    detect_shape(dilated_img, dst, shape);
+}
+
+/**It detects only circles with given color. It marks all circles with the given color. cv::Mat& src is the input image,
+cv::Mat& dst is the output image which you marked the circles with the given color. cv::Mat& contoursImage will include contours 
+of circles with given color,string& shape will be automatically "cir", string& color will be the given color.*/
+void stage2(cv:: Mat& src, cv::Mat& dst, cv::Mat& contoursImage, string& shape, string& color){
+    //Preparation part for color detection.
+    cv::Mat color_blured_img, HSV_img, color_mask;
+    cv::GaussianBlur(src, color_blured_img, cv::Size(5,5), 3, 0);//Gaussian blur for color detection.    
+    cv::cvtColor(color_blured_img, HSV_img, cv::COLOR_BGR2HSV);//Color change for color detection.
+    cv::inRange(HSV_img, cv::Scalar(minH, minS, minV), cv::Scalar(maxH, maxS, maxV), color_mask);//Threshold 
+    cv::imshow("MASK", color_mask);
+    //Detect the given color.
+    detect_color(color_mask, contoursImage, color);
+
+    //Preparation part for shape detection with asked color.
+    cv::Mat gray_img, shape_blured_img, canny_img, dilated_img;
+    cv::cvtColor(contoursImage, gray_img, cv::COLOR_BGR2GRAY);
+    cv::GaussianBlur(gray_img, shape_blured_img, cv::Size(3,3), 3, 0);
+    cv::Canny(shape_blured_img, canny_img, 0, 50);
+
+    cv::Mat se1 = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3));//Kernel for dilation.
+    cv::dilate(canny_img, dilated_img, se1);
+    //Detect the given shape.
+    detect_shape(dilated_img, dst, shape);
+}
+
+/**It detects the object having asked shape and color. It marks the asked objects. cv::Mat& src is the input image,
+cv::Mat& dst is the output image which will be marked, cv::Mat& contoursImage is the image including contours of objects with given color,
+string& shape is the asked shape, string& color is the asked color.*/
+void stage3(cv::Mat& src, cv::Mat& dst, cv::Mat& contoursImage, string& shape, string& color){
+    //Preparation part for color detection.
+    cv::Mat color_blured_img, HSV_img, color_mask;
+    cv::GaussianBlur(src, color_blured_img, cv::Size(5,5), 3, 0);//Gaussian blur for color detection.    
+    cv::cvtColor(color_blured_img, HSV_img, cv::COLOR_BGR2HSV);//Color change for color detection.
+    cv::inRange(HSV_img, cv::Scalar(minH, minS, minV), cv::Scalar(maxH, maxS, maxV), color_mask);//Threshold 
+    cv::imshow("MASK", color_mask);
+    //Detect the given color.
+    detect_color(color_mask, contoursImage, color);
+ 
+    //Preparation part for shape detection with asked color.
+    cv::Mat gray_img, shape_blured_img, canny_img, dilated_img;
+    cv::cvtColor(contoursImage, gray_img, cv::COLOR_BGR2GRAY);
+    cv::GaussianBlur(gray_img, shape_blured_img, cv::Size(3,3), 3, 0);
+    cv::Canny(shape_blured_img, canny_img, 0, 50);
+    cv::Mat se1 = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3));//Kernel for dilation.
+    cv::dilate(canny_img, dilated_img, se1);
+    
+    //Detect the given shape.
+    detect_shape(dilated_img, dst, shape);
+}
+
+/**You can use this function to test your color detection.*/
+void justColors(cv::Mat& src, cv::Mat& dst){
+    cv::Mat hsv_image, mask;
+    cv::cvtColor(src, hsv_image, cv::COLOR_BGR2HSV);
+    cv::inRange(hsv_image, cv::Scalar(minH, minS, minV), cv::Scalar(maxH, maxS, maxV), mask);
+    cv::imshow("Original", src);
+    cv::imshow("Mask", mask);
+}
+
+/**It finds center points of moments.*/
+vector<cv::Point2f> findCenterPoint(vector<vector<cv::Point>>contours){
+    vector<cv::Moments> mu(contours.size());
+    for(size_t i = 0; i < contours.size(); i++){
+        mu[i] = cv::moments(contours[i]);
+    }
+
+    vector<cv::Point2f>mc(contours.size());
+    float mcenterx, mcentery;
+    for(size_t i = 0; i < contours.size(); i++){
+        mcenterx = mu[i].m10/mu[i].m00;//Sum of X / area
+        mcentery = mu[i].m01/mu[i].m00;//Sum of Y /area
+        mc[i] = cv::Point2f((mcenterx), (mcentery));
+    }
+    return mc;
+}
